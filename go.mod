@@ -16,8 +16,6 @@ require (
 
 replace github.com/tyler-smith/go-bip39 => github.com/luxfi/go-bip39 v1.1.1
 
-// require gioui.org v0.7.1
-
 require (
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

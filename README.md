@@ -45,6 +45,15 @@ cd gramium
 go mod tidy
 go build -o gramium ./frontend
 ```
+
+On Windows:
+```cmd
+git clone https://github.com/MirasakaDrakon/gramium.git
+cd gramium
+go mod tidy
+go build -o gramium.exe ./frontend
+```
+
 The resulting binary `gramium` (or `gramium.exe` on Windows) is ready to run.
 
 You can start without building:

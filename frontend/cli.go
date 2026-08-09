@@ -314,8 +314,8 @@ func RunCLI(proxyURL string) {
                                   /add Bob 12D3KooW...                (gramium assumed)
                                   /add Charlie gramium:... tox:...
     /list                     – show all contacts with names, statuses and IDs
-    /whois <name_or_id>      – show detailed info for a contact
-    /remove <name_or_id>     – delete a contact and all message history
+    /whois <name_or_id>       – show detailed info for a contact
+    /remove <name_or_id>      – delete a contact and all message history
     /debug                    – dump raw contacts table (id, username, peer_id, tox_id)
 
   MESSAGING

@@ -1,3 +1,4 @@
+//IMPORTANT NOTE: TOX SUPPPORT IS DISABLED, BUT DO NOT REMOVE THE COMMENTED CODE FRAGMENTS!!!
 package main
 
 import (
@@ -11,7 +12,8 @@ import (
     "strings"
     "syscall"
     "time"
-
+    "os/exec"
+    "runtime"
     "github.com/sirupsen/logrus"
     "github.com/tyler-smith/go-bip39"
     "golang.org/x/term"
@@ -19,7 +21,28 @@ import (
     "gramium/core"
 )
 
-func RunCLI() {
+func CallClear() {
+    var cmd *exec.Cmd
+    
+    if runtime.GOOS == "windows" {
+        cmd = exec.Command("cmd", "/c", "cls")
+    } else {
+        cmd = exec.Command("clear")
+    }
+    
+    cmd.Stdout = os.Stdout
+    cmd.Run()
+}
+
+func RunCLI(proxyURL string) {
+    CallClear()
+    fmt.Print(" ██████╗ ██████╗  █████╗ ███╗   ███╗██╗██╗   ██╗███╗   ███╗\n")
+    fmt.Print("██╔════╝ ██╔══██╗██╔══██╗████╗ ████║██║██║   ██║████╗ ████║\n")
+    fmt.Print("██║  ███╗██████╔╝███████║██╔████╔██║██║██║   ██║██╔████╔██║\n")
+    fmt.Print("██║   ██║██╔══██╗██╔══██║██║╚██╔╝██║██║██║   ██║██║╚██╔╝██║\n")
+    fmt.Print("╚██████╔╝██║  ██║██║  ██║██║ ╚═╝ ██║██║╚██████╔╝██║ ╚═╝ ██║\n")
+    fmt.Print(" ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ ╚═╝     ╚═╝\n")
+    fmt.Print("\n")                                                       
     home, err := os.UserHomeDir()
     if err != nil {
         fmt.Printf("[WARN] Failed to retrieve home directory: %v\n", err)
@@ -72,13 +95,12 @@ func RunCLI() {
             username = "user"
         }
         meta.Username = username
-
+        fmt.Println("\nWARNING! If you forget your password, username, or any other authentication details, you will not be able to recover your account!")
         fmt.Println("\nSelect an authentication method:")
         fmt.Println("  1. Master key (password)")
-        fmt.Println("  2. Username (auth) + password")
+        fmt.Println("  2. Login + password")
         fmt.Println("  3. Seed phrase (BIP-39, 12 words)")
-        fmt.Println("  4. AES-256 certificate file (key.pem)")
-        fmt.Print("Your choice (1-4): ")
+        fmt.Print("Your choice (1-3): ")
         scanner.Scan()
         methodStr := strings.TrimSpace(scanner.Text())
         method, _ := strconv.Atoi(methodStr)
@@ -101,7 +123,7 @@ func RunCLI() {
             password = string(pw1)
 
         case 2:
-            fmt.Print("Enter username (auth): ")
+            fmt.Print("Enter a login(this can be anything, an email address, a phone number, etc): ")
             scanner.Scan()
             login := strings.TrimSpace(scanner.Text())
             if login == "" {
@@ -129,17 +151,6 @@ func RunCLI() {
             fmt.Print("\nPress Enter to continue...")
             scanner.Scan()
             password = mnemonic
-
-        case 4:
-            fmt.Print("Enter the path to the certificate file (key.pem): ")
-            scanner.Scan()
-            certPath := strings.TrimSpace(scanner.Text())
-            data, err := os.ReadFile(certPath)
-            if err != nil {
-                fmt.Printf("[ERROR] Failed to read file: %v\n", err)
-                os.Exit(1)
-            }
-            password = string(data)
         }
 
         data, _ := json.Marshal(meta)
@@ -167,7 +178,7 @@ func RunCLI() {
             password = string(pw)
 
         case 2:
-            fmt.Print("[AUTH] Enter username (auth): ")
+            fmt.Print("[AUTH] Enter login(auth): ")
             scanner.Scan()
             login := strings.TrimSpace(scanner.Text())
             fmt.Print("[AUTH] Enter password: ")
@@ -179,17 +190,6 @@ func RunCLI() {
             fmt.Print("[AUTH] Enter seed phrase (12 words): ")
             scanner.Scan()
             password = strings.TrimSpace(scanner.Text())
-
-        case 4:
-            fmt.Print("[AUTH] Enter the path to the certificate file (key.pem): ")
-            scanner.Scan()
-            certPath := strings.TrimSpace(scanner.Text())
-            data, err := os.ReadFile(certPath)
-            if err != nil {
-                fmt.Printf("[ERROR] Failed to read file: %v\n", err)
-                os.Exit(1)
-            }
-            password = string(data)
         }
 
         if data, err := os.ReadFile(metaFile); err == nil {
@@ -197,9 +197,19 @@ func RunCLI() {
         }
     }
 
+    CallClear()
+    fmt.Print(" ██████╗ ██████╗  █████╗ ███╗   ███╗██╗██╗   ██╗███╗   ███╗\n")
+    fmt.Print("██╔════╝ ██╔══██╗██╔══██╗████╗ ████║██║██║   ██║████╗ ████║\n")
+    fmt.Print("██║  ███╗██████╔╝███████║██╔████╔██║██║██║   ██║██╔████╔██║\n")
+    fmt.Print("██║   ██║██╔══██╗██╔══██║██║╚██╔╝██║██║██║   ██║██║╚██╔╝██║\n")
+    fmt.Print("╚██████╔╝██║  ██║██║  ██║██║ ╚═╝ ██║██║╚██████╔╝██║ ╚═╝ ██║\n")
+    fmt.Print(" ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ ╚═╝     ╚═╝\n")
+    fmt.Print("\n")
+
     cfg := &core.Config{
-        Mode:   "speed",
-        DBPath: dbPath,
+        Mode:     "speed",
+        DBPath:   dbPath,
+        ProxyURL: proxyURL,
     }
     if len(os.Args) > 1 && os.Args[1] == "--anonymity" {
         cfg.Mode = "anonymity"
@@ -235,30 +245,85 @@ func RunCLI() {
         switch cmd {
         case "/help":
             fmt.Println(`
-Available commands:
-  /help                - this help
-  /me                  - show my IDs and metadata
-  /setmeta <key> <value> - set metadata field (username, display_name, bio, status)
-  /changepass          - change password
-  /switch <mode>       - switch mode (speed / anonymity)
-  /add <name> <peerid> [tox_id] - add a contact
-  /list                - show contact list
-  /whois <name>        - show contact information
-  /send <gramium|tox> <to> <msg> - send a message via the selected protocol
-  /history <contact> [count] - show chat history
-  /remove <contact>    - remove a contact
-  /debug               - show raw contact data (for debugging)
-  /purge               - completely delete all data (requires password and confirmation)
-  /exit                - exit
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                         G R A M I U M   C L I   —   Help                      ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+  BASIC COMMANDS
+  ───────────────
+    /help                     – show this help
+    /exit                     – quit the application
+    /ip                       – show your public IP with detailed geolocation
+                                (country, region, city, coordinates, ISP, AS, TZ)
+                                If a proxy is active, the IP of the exit node is shown.
+
+  PROFILE & SETTINGS
+  ──────────────────
+    /me                       – display your Gramium peer ID and all metadata
+    /setmeta <key> <value>    – update a metadata field.
+                                Keys: username, display_name, bio, status
+                                Example: /setmeta status "away"
+    /changepass               – change your master password (methods 1 and 2 only)
+    /switch <mode>            – switch network mode: speed or anonymity.
+                                Affects libp2p NAT, relay and hole punching.
+
+  CONTACT MANAGEMENT
+  ──────────────────
+    /add <name> <id1> [id2]  – add a contact.
+                                Each ID can be prefixed with:
+                                  gramium:  – for libp2p Peer ID (base58)
+                                  tox:      – for Tox ID (hexadecimal) – currently disabled
+                                If no prefix is given, ID is assumed to be gramium.
+                                Examples:
+                                  /add Alice gramium:12D3KooW...
+                                  /add Bob 12D3KooW...                (gramium assumed)
+                                  /add Charlie gramium:... tox:...
+    /list                     – show all contacts with names, statuses and IDs
+    /whois <name_or_id>      – show detailed info for a contact
+    /remove <name_or_id>     – delete a contact and all message history
+    /debug                    – dump raw contacts table (id, username, peer_id, tox_id)
+
+  MESSAGING
+  ──────────
+    /send <to> <message>      – send a message via Gramium protocol.
+                                <to> can be a contact name, Peer ID, or full gramium:ID.
+                                Example: /send Alice "Hello, world!"
+    /history <contact> [n]    – show last n messages (default 20) with a contact
+
+  DANGEROUS
+  ──────────
+    /purge                    – DELETE ALL DATA: contacts, messages, keys, encrypted DB.
+                                Requires password confirmation and exits after completion.
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  NOTES                                                                        ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  • Gramium Peer ID is a base58 string like 12D3KooW...                        ║
+║  • Tox support is currently disabled (code fragments remain).                 ║
+║  • Proxy support: launch with --proxy=socks5://127.0.0.1:1080 or              ║
+║    --proxy=http://proxy.example.com:8080. All network traffic (including      ║
+║    /ip queries) will go through the proxy.                                    ║
+║  • All metadata changes are saved to ~/.gramium/meta.json and encrypted DB.   ║
+║  • Commands can be used with or without the '/' prefix (but /help requires    ║
+║    the slash).                                                                ║
+║  • For more details, check the source code or project documentation.          ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 `)
+
         case "/me":
             ids := node.GetIDs()
             fmt.Printf("[ID] Gramium: %s\n", ids["gramium"])
-            if toxID, ok := ids["tox"]; ok {
-                fmt.Printf("[TOX] Tox ID: %s\n", toxID)
-            } else {
-                fmt.Println("[TOX] Tox is not running")
-            }
+
+            //TOX DISABLED!!!
+            //
+            //if toxID, ok := ids["tox"]; ok {
+            //    fmt.Printf("[TOX] Tox ID: %s\n", toxID)
+            //} else {
+            //    fmt.Println("[TOX] Tox is not running")
+            //}
+            //
+            //TOX DISABLED!!!
+
             m := node.GetMyMeta()
             fmt.Printf("[USER] Username: %s\n", m.Username)
             if m.DisplayName != "" {
@@ -344,18 +409,45 @@ Available commands:
 
         case "/add":
             if len(fields) < 3 {
-                fmt.Println("[ERROR] Usage: /add <name> <peer_id> [tox_id]")
+                fmt.Println("[ERROR] Usage: /add <name> <id1> [id2]")
+                fmt.Println("  Each id can have prefix 'gramium:' or 'tox:'")
                 continue
             }
             name := fields[1]
-            var peerID, toxID string
-            if len(fields) == 3 {
-                peerID = ""
-                toxID = fields[2]
+            var peerID, toxID string        
+
+            parseID := func(s string) (string, string) {
+                if strings.HasPrefix(s, "gramium:") {
+                    return strings.TrimPrefix(s, "gramium:"), "gramium"
+                }
+                if strings.HasPrefix(s, "tox:") {
+                    return strings.TrimPrefix(s, "tox:"), "tox"
+                }
+                return s, "gramium"
+            }       
+
+            id1, typ1 := parseID(fields[2])
+            if typ1 == "gramium" {
+                peerID = id1
             } else {
-                peerID = fields[2]
-                toxID = fields[3]
-            }
+                toxID = id1
+            }       
+
+            if len(fields) >= 4 {
+                id2, typ2 := parseID(fields[3])
+                if typ2 == "gramium" {
+                    if peerID != "" {
+                        fmt.Println("[WARN] Already have a gramium ID, overwriting")
+                    }
+                    peerID = id2
+                } else {
+                    if toxID != "" {
+                        fmt.Println("[WARN] Already have a tox ID, overwriting")
+                    }
+                    toxID = id2
+                }
+            }       
+
             if err := node.AddContact(name, peerID, toxID); err != nil {
                 fmt.Printf("[ERROR] Failed to add contact: %v\n", err)
             } else {
@@ -409,22 +501,112 @@ Available commands:
             }
 
         case "/send":
-            if len(fields) < 4 {
-                fmt.Println("[ERROR] Usage: /send <gramium|tox> <to> <message>")
+            //TOX DISABLED!!!
+            //
+            //if len(fields) < 4 {
+            //
+            //TOX DISABLED!!!
+
+            if len(fields) < 3 {
+                fmt.Println("[ERROR] Usage: /send <to> <message>")
                 continue
             }
-            protocol := fields[1]
-            to := fields[2]
-            message := strings.Join(fields[3:], " ")
-            if protocol != "gramium" && protocol != "tox" {
-                fmt.Println("[ERROR] Protocol must be gramium or tox")
-                continue
-            }
-            if err := node.SendMessage(to, []byte(message), protocol); err != nil {
+
+            //TOX DISABLED!!!
+            //
+            //protocol := fields[1]
+            //to := fields[2]
+            //
+            //TOX DISABLED!!!
+
+            to := fields[1]
+
+            //TOX DISABLED!!!
+            //
+            //message := strings.Join(fields[3:], " ")
+            //
+            //TOX DISABLED!!!
+
+            message := strings.Join(fields[2:], " ")
+
+            //TOX DISABLED!!!
+            //
+            //if protocol != "gramium" && protocol != "tox" {
+            //    fmt.Println("[ERROR] Protocol must be gramium or tox")
+            //    continue
+            //}
+            //if err := node.SendMessage(to, []byte(message), protocol); err != nil {
+            //
+            //TOX DISABLED!!!
+
+            if err := node.SendMessage(to, []byte(message), "gramium"); err != nil {
                 fmt.Printf("[ERROR] Send failed: %v\n", err)
             } else {
-                fmt.Printf("[OK] Message sent via %s\n", protocol)
+                //TOX DISABLED!!!
+                //
+                //fmt.Printf("[OK] Message sent via %s\n", protocol)
+                //
+                //TOX DISABLED!!!
+
+                fmt.Println("[OK] Message sent")
             }
+
+        case "/ip":
+            info, err := node.GetIPInfo()
+            if err != nil {
+                fmt.Printf("[ERROR] Failed to get IP info: %v\n", err)
+                continue
+            }       
+
+            locParts := []string{}
+            if info.Country != "" {
+                locParts = append(locParts, info.Country)
+            }
+            if info.CountryCode != "" {
+                locParts = append(locParts, info.CountryCode)
+            }
+            if info.RegionName != "" {
+                locParts = append(locParts, info.RegionName)
+            }
+            if info.Region != "" {
+                locParts = append(locParts, info.Region)
+            }
+            if info.City != "" {
+                locParts = append(locParts, info.City)
+            }
+            locationStr := strings.Join(locParts, "/")      
+
+            output := fmt.Sprintf("Your IP is: %s", info.Query)
+            if locationStr != "" {
+                output += fmt.Sprintf(" (%s", locationStr)
+                if info.Lat != 0 || info.Lon != 0 {
+                    output += fmt.Sprintf(" - %.4f,%.4f", info.Lat, info.Lon)
+                }
+                output += ")"
+            }       
+
+            details := []string{}
+            if info.Timezone != "" {
+                details = append(details, fmt.Sprintf("TZ: %s", info.Timezone))
+            }
+            if info.Isp != "" {
+                details = append(details, fmt.Sprintf("ISP: %s", info.Isp))
+            }
+            if info.Org != "" && info.Org != info.Isp {
+                details = append(details, fmt.Sprintf("Org: %s", info.Org))
+            }
+            if info.As != "" {
+                details = append(details, fmt.Sprintf("AS/ASN: %s", info.As))
+            }
+            if len(details) > 0 {
+                output += " ; " + strings.Join(details, " ; ")
+            }       
+
+            if node.Cfg.ProxyURL != "" {
+                output += " ; [PROXY]"
+            }       
+
+            fmt.Println("[IP]", output)
 
         case "/history":
             if len(fields) < 2 {
@@ -543,7 +725,7 @@ Available commands:
                 purgePassword = string(pw)
 
             case 2:
-                fmt.Print("[AUTH] Enter username (auth): ")
+                fmt.Print("[AUTH] Enter login (auth): ")
                 scanner.Scan()
                 login := strings.TrimSpace(scanner.Text())
                 fmt.Print("[AUTH] Enter password: ")
@@ -555,17 +737,6 @@ Available commands:
                 fmt.Print("[AUTH] Enter seed phrase (12 words): ")
                 scanner.Scan()
                 purgePassword = strings.TrimSpace(scanner.Text())
-
-            case 4:
-                fmt.Print("[AUTH] Enter the path to the certificate file (key.pem): ")
-                scanner.Scan()
-                certPath := strings.TrimSpace(scanner.Text())
-                data, err := os.ReadFile(certPath)
-                if err != nil {
-                    fmt.Printf("[ERROR] Failed to read file: %v\n", err)
-                    continue
-                }
-                purgePassword = string(data)
             }
 
             if err := node.AuthManager.PurgeDatabase(purgePassword); err != nil {

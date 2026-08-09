@@ -1,15 +1,18 @@
+//IMPORTANT NOTE: TOX SUPPPORT IS DISABLED, BUT DO NOT REMOVE THE COMMENTED CODE FRAGMENTS!!!
 package core
 
 import (
+    "encoding/json"
+    "io"
+    "net/http"
     "context"
     "crypto/rand"
     "database/sql"
-    "encoding/json"
     "fmt"
     "math/big"
     "strings"
     "time"
-
+    "os"
     "github.com/libp2p/go-libp2p"
     "github.com/libp2p/go-libp2p-kad-dht"
     "github.com/libp2p/go-libp2p/core/crypto"
@@ -19,6 +22,23 @@ import (
     "github.com/libp2p/go-libp2p/p2p/security/noise"
     "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 )
+
+type IPInfo struct {
+    Status      string  `json:"status"`
+    Country     string  `json:"country"`
+    CountryCode string  `json:"countryCode"`
+    Region      string  `json:"region"`
+    RegionName  string  `json:"regionName"`
+    City        string  `json:"city"`
+    Zip         string  `json:"zip"`          
+    Lat         float64 `json:"lat"`
+    Lon         float64 `json:"lon"`
+    Timezone    string  `json:"timezone"`
+    Isp         string  `json:"isp"`
+    Org         string  `json:"org"`
+    As          string  `json:"as"`
+    Query       string  `json:"query"`
+}
 
 type PeerMeta struct {
     Username      string   `json:"username"`
@@ -35,6 +55,7 @@ type PeerMeta struct {
 type Config struct {
     Mode   string
     DBPath string
+    ProxyURL string
 }
 
 type Node struct {
@@ -48,15 +69,55 @@ type Node struct {
     PrivKey      crypto.PrivKey
     PubKey       crypto.PubKey
     MyMeta       *PeerMeta
-    ToxNode      *ToxNode
-    ToxCancel    context.CancelFunc
+    //TOX DISABLED!!!
+    //
+    //ToxNode      *ToxNode
+    //ToxCancel    context.CancelFunc
+    //
+    //TOX DISABLED!!!
     AuthManager  *AuthManager
     dbPath       string
+}
+
+func (n *Node) GetIPInfo() (*IPInfo, error) {
+    client := &http.Client{Timeout: 10 * time.Second}
+    
+    resp, err := client.Get("http://ip-api.com/json")
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
+    
+    var info IPInfo
+    if err := json.Unmarshal(body, &info); err != nil {
+        return nil, err
+    }
+    
+    if info.Status != "success" {
+        return nil, fmt.Errorf("API returned status: %s", info.Status)
+    }
+    
+    return &info, nil
 }
 
 func NewNode(cfg *Config, password string, meta *PeerMeta) (*Node, error) {
     ctx, cancel := context.WithCancel(context.Background())
     n := &Node{ctx: ctx, cancel: cancel, Cfg: cfg, dbPath: cfg.DBPath}
+
+    if cfg.ProxyURL != "" {
+        os.Setenv("HTTP_PROXY", cfg.ProxyURL)
+        os.Setenv("HTTPS_PROXY", cfg.ProxyURL)
+        if strings.HasPrefix(cfg.ProxyURL, "socks5://") {
+            os.Setenv("ALL_PROXY", cfg.ProxyURL)
+        }
+        fmt.Println("[PROXY] Using proxy:", cfg.ProxyURL)
+    }
+
     n.AuthManager = NewAuthManager(cfg.DBPath)
 
     db, loadedMeta, err := n.AuthManager.OpenDatabase(password)
@@ -81,16 +142,20 @@ func NewNode(cfg *Config, password string, meta *PeerMeta) (*Node, error) {
         return nil, err
     }
     n.Host.SetStreamHandler("/gramium/1.0.0", n.handleStream)
-
-    toxCtx, toxCancel := context.WithCancel(ctx)
-    toxNode, err := NewToxNode(toxCtx, n.DB, n.AuthManager)
-    if err != nil {
-        fmt.Println("[WARNING] Tox not started:", err)
-        n.ToxCancel = toxCancel
-    } else {
-        n.ToxNode = toxNode
-        n.ToxCancel = toxCancel
-    }
+    
+    //TOX DISABLED!!!
+    //
+    //toxCtx, toxCancel := context.WithCancel(ctx)
+    //toxNode, err := NewToxNode(toxCtx, n.DB, n.AuthManager, n.Cfg)
+    //if err != nil {
+    //    fmt.Println("[WARNING] Tox not started:", err)
+    //    n.ToxCancel = toxCancel
+    //} else {
+    //    n.ToxNode = toxNode
+    //    n.ToxCancel = toxCancel
+    //}
+    //
+    //TOX DISABLED!!!
     return n, nil
 }
 
@@ -134,6 +199,7 @@ func (n *Node) setupHost() error {
         libp2p.Identity(n.PrivKey),
         libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"),
         libp2p.Security(noise.ID, noise.New),
+        libp2p.Transport(tcp.NewTCPTransport),
     }
     if n.Cfg.Mode == "anonymity" {
         opts = append(opts,
@@ -143,7 +209,6 @@ func (n *Node) setupHost() error {
         )
     } else {
         opts = append(opts,
-            libp2p.Transport(tcp.NewTCPTransport),
             libp2p.NATPortMap(),
             libp2p.EnableHolePunching(),
         )
@@ -253,13 +318,21 @@ func (n *Node) updateContactMeta(peerIDStr, toxIDStr string, meta *PeerMeta) err
         return err
     }
     defer tx.Rollback()
+
     featuresJSON, _ := json.Marshal(meta.Features)
+
     var existingToxID string
     if toxIDStr == "" {
         row := tx.QueryRow("SELECT tox_id FROM contacts WHERE peer_id = ?", peerIDStr)
         row.Scan(&existingToxID)
         toxIDStr = existingToxID
     }
+
+    var toxIDPtr interface{} = nil
+    if toxIDStr != "" {
+        toxIDPtr = toxIDStr
+    }
+
     _, err = tx.Exec(`
         INSERT INTO contacts (
             peer_id, tox_id, username, display_name, bio, avatar_hash,
@@ -277,9 +350,9 @@ func (n *Node) updateContactMeta(peerIDStr, toxIDStr string, meta *PeerMeta) err
             status = excluded.status,
             features = excluded.features,
             last_seen = excluded.last_seen
-    `, peerIDStr, toxIDStr, meta.Username, meta.DisplayName, meta.Bio, meta.AvatarHash,
+    `, peerIDStr, toxIDPtr, meta.Username, meta.DisplayName, meta.Bio, meta.AvatarHash,
         meta.ClientName, meta.ClientVersion, meta.ClientOS, meta.Status, string(featuresJSON), time.Now().Unix(),
-        toxIDStr)
+        toxIDPtr)
     if err != nil {
         return err
     }
@@ -287,12 +360,16 @@ func (n *Node) updateContactMeta(peerIDStr, toxIDStr string, meta *PeerMeta) err
 }
 
 func (n *Node) SendMessage(to string, data []byte, protocol string) error {
-    if protocol == "tox" {
-        if n.ToxNode == nil {
-            return fmt.Errorf("Tox is not available")
-        }
-        return n.ToxNode.SendMessage(to, string(data), n.MyMeta)
-    }
+    //TOX DISABLED!!!
+    //
+    //if protocol == "tox" {
+    //    if n.ToxNode == nil {
+    //        return fmt.Errorf("Tox is not available")
+    //    }
+    //    return n.ToxNode.SendMessage(to, string(data), n.MyMeta)
+    //}
+    //
+    //TOX DISABLED!!!
     return n.sendGramiumMessage(to, data)
 }
 
@@ -435,9 +512,13 @@ func (n *Node) SetMyMeta(meta *PeerMeta) {
 func (n *Node) GetIDs() map[string]string {
     ids := make(map[string]string)
     ids["gramium"] = "gramium:" + n.PeerID.String()
-    if n.ToxNode != nil {
-        ids["tox"] = n.ToxNode.GetToxID()
-    }
+    //TOX DISABLED!!!
+    //
+    //if n.ToxNode != nil {
+    //    ids["tox"] = n.ToxNode.GetToxID()
+    //}
+    //
+    //TOX DISABLED!!!
     return ids
 }
 
@@ -445,21 +526,40 @@ func (n *Node) AddContact(name, peerID, toxID string) error {
     if peerID != "" {
         peerID = trimGramiumPrefix(peerID)
     }
+
+    var peerIDPtr interface{} = nil
+    if peerID != "" {
+        peerIDPtr = peerID
+    }
+    var toxIDPtr interface{} = nil
+    if toxID != "" {
+        toxIDPtr = toxID
+    }
+
     tx, err := n.DB.Begin()
     if err != nil {
         return err
     }
     defer tx.Rollback()
-    _, err = tx.Exec("INSERT OR IGNORE INTO contacts (peer_id, tox_id) VALUES (?, ?)", peerID, toxID)
+
+    _, err = tx.Exec("INSERT OR IGNORE INTO contacts (peer_id, tox_id) VALUES (?, ?)", peerIDPtr, toxIDPtr)
     if err != nil {
         return err
     }
+
     if name != "" {
-        _, err = tx.Exec("UPDATE contacts SET username = ? WHERE peer_id = ? OR tox_id = ?", name, peerID, toxID)
+        if peerID != "" {
+            _, err = tx.Exec("UPDATE contacts SET username = ? WHERE peer_id = ?", name, peerID)
+        } else if toxID != "" {
+            _, err = tx.Exec("UPDATE contacts SET username = ? WHERE tox_id = ?", name, toxID)
+        } else {
+            return fmt.Errorf("both peer_id and tox_id are empty")
+        }
         if err != nil {
             return err
         }
     }
+
     return tx.Commit()
 }
 
@@ -469,49 +569,78 @@ func (n *Node) ListContacts() ([]string, error) {
         return nil, err
     }
     defer rows.Close()
+
     var list []string
     for rows.Next() {
-        var username, displayName, status, peerID, toxID string
-        rows.Scan(&username, &displayName, &status, &peerID, &toxID)
-        name := username
-        if displayName != "" {
-            name = displayName + " (" + username + ")"
+        var username, displayName, status sql.NullString
+        var peerID, toxID sql.NullString
+
+        err := rows.Scan(&username, &displayName, &status, &peerID, &toxID)
+        if err != nil {
+            return nil, err
         }
-        if status == "" {
-            status = "unknown"
+
+        name := username.String
+        if !username.Valid || username.String == "" {
+            name = "unnamed"
         }
-        id := peerID
-        if toxID != "" {
-            id = toxID + " (Tox)"
+        if displayName.Valid && displayName.String != "" {
+            name = displayName.String + " (" + username.String + ")"
         }
-        list = append(list, fmt.Sprintf("%s [%s] (%s)", name, status, id))
+
+        stat := status.String
+        if !status.Valid || status.String == "" {
+            stat = "unknown"
+        }
+
+        var id string
+        if peerID.Valid && peerID.String != "" {
+            id = "gramium:" + peerID.String
+        }
+        if toxID.Valid && toxID.String != "" {
+            if id != "" {
+                id += ", tox:" + toxID.String
+            } else {
+                id = "tox:" + toxID.String
+            }
+        }
+        if id == "" {
+            id = "no ID"
+        }
+
+        list = append(list, fmt.Sprintf("%s [%s] (%s)", name, stat, id))
     }
     return list, nil
 }
 
 func (n *Node) GetContactMeta(identifier string) (*PeerMeta, error) {
-    var username, displayName, bio, avatarHash, clientName, clientVersion, clientOS, status, featuresStr string
+    var username, displayName, bio, avatarHash, clientName, clientVersion, clientOS, status sql.NullString
+    var featuresStr sql.NullString
+
     row := n.DB.QueryRow(`
         SELECT username, display_name, bio, avatar_hash, client_name, client_version, client_os, status, features
         FROM contacts WHERE username = ? OR peer_id = ? OR tox_id = ?
     `, identifier, identifier, identifier)
+
     err := row.Scan(&username, &displayName, &bio, &avatarHash, &clientName, &clientVersion, &clientOS, &status, &featuresStr)
     if err != nil {
         return nil, err
     }
-    var features []string
-    json.Unmarshal([]byte(featuresStr), &features)
-    return &PeerMeta{
-        Username:      username,
-        DisplayName:   displayName,
-        Bio:           bio,
-        AvatarHash:    avatarHash,
-        ClientName:    clientName,
-        ClientVersion: clientVersion,
-        ClientOS:      clientOS,
-        Status:        status,
-        Features:      features,
-    }, nil
+
+    meta := &PeerMeta{
+        Username:      username.String,
+        DisplayName:   displayName.String,
+        Bio:           bio.String,
+        AvatarHash:    avatarHash.String,
+        ClientName:    clientName.String,
+        ClientVersion: clientVersion.String,
+        ClientOS:      clientOS.String,
+        Status:        status.String,
+    }
+    if featuresStr.Valid && featuresStr.String != "" {
+        json.Unmarshal([]byte(featuresStr.String), &meta.Features)
+    }
+    return meta, nil
 }
 
 func (n *Node) SwitchMode(newMode string) error {
@@ -550,12 +679,18 @@ func (n *Node) Start() error {
 
 func (n *Node) Stop() {
     n.cancel()
-    if n.ToxNode != nil {
-        n.ToxNode.Stop()
-    }
-    if n.ToxCancel != nil {
-        n.ToxCancel()
-    }
+
+    //TOX DISABLED!!!
+    //
+    //if n.ToxNode != nil {
+    //    n.ToxNode.Stop()
+    //}
+    //if n.ToxCancel != nil {
+    //   n.ToxCancel()
+    //}
+    //
+    //TOX DISABLED!!!
+
     if n.Host != nil {
         n.Host.Close()
     }

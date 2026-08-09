@@ -1,3 +1,4 @@
+//IMPORTANT NOTE: TOX SUPPPORT IS DISABLED, BUT DO NOT REMOVE THE COMMENTED CODE FRAGMENTS!!!
 package core
 
 import (
@@ -41,8 +42,13 @@ type AuthManager struct {
     password string
     db       *sql.DB
     privKey  []byte
-    toxKey   []byte
-    toxSave  []byte
+
+    //TOX DISABLED!!!
+    //
+    //toxKey   []byte
+    //toxSave  []byte
+    //
+    //TOX DISABLED!!!
 }
 
 func NewAuthManager(dbPath string) *AuthManager {
@@ -188,6 +194,13 @@ func (am *AuthManager) CreateDatabase(password string, meta *PeerMeta, method in
         return fmt.Errorf("failed to open temporary database: %w", err)
     }
     defer db.Close()
+    //TOX DISABLED!!!
+    //
+    //THOSE COLONS DELETED:
+    //tox_key BLOB
+    //tox_save BLOB
+    //
+    //TOX DISABLED!!!
 
     _, err = db.Exec(`
         CREATE TABLE auth (
@@ -202,9 +215,7 @@ func (am *AuthManager) CreateDatabase(password string, meta *PeerMeta, method in
             status TEXT,
             features TEXT,
             created_at INTEGER,
-            privkey BLOB,
-            tox_key BLOB,
-            tox_save BLOB
+            privkey BLOB
         );
         CREATE TABLE contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -295,8 +306,13 @@ func (am *AuthManager) PurgeDatabase(password string) error {
     am.tempPath = ""
     am.password = ""
     am.privKey = nil
-    am.toxKey = nil
-    am.toxSave = nil
+
+    //TOX DISABLED!!!
+    //
+    //am.toxKey = nil
+    //am.toxSave = nil
+    //
+    //TOX DISABLED!!!
 
     if removeErr != nil {
         return fmt.Errorf("partial removal: %w", removeErr)
@@ -342,15 +358,21 @@ func (am *AuthManager) OpenDatabase(password string) (*sql.DB, *PeerMeta, error)
 
     var username, displayName, bio, avatarHash, clientName, clientVersion, clientOS, status, featuresStr string
     var createdAt int64
-    var privKey, toxKey, toxSave []byte
 
+    //TOX DISABLED!!!
+    //
+    //var privKey, toxKey, toxSave []byte
+    //
+    //TOX DISABLED!!!
+    
+    var privKey []byte
     err = db.QueryRow(`
         SELECT username, display_name, bio, avatar_hash, client_name, client_version, client_os, status, features, created_at,
-               privkey, tox_key, tox_save
+               privkey
         FROM auth LIMIT 1
     `).Scan(&username, &displayName, &bio, &avatarHash,
         &clientName, &clientVersion, &clientOS, &status, &featuresStr, &createdAt,
-        &privKey, &toxKey, &toxSave)
+        &privKey) //&toxKey, &toxSave(362) AND tox_key, tox_save(358) DELETED
     if err != nil {
         db.Close()
         os.Remove(am.tempPath)
@@ -373,8 +395,12 @@ func (am *AuthManager) OpenDatabase(password string) (*sql.DB, *PeerMeta, error)
     }
 
     am.privKey = privKey
-    am.toxKey = toxKey
-    am.toxSave = toxSave
+
+    //TOX DISABLED!!!
+    //am.toxKey = toxKey
+    //am.toxSave = toxSave
+    //TOX DISABLED!!!
+
     am.password = password
     am.db = db
 
@@ -437,43 +463,47 @@ func (am *AuthManager) SetPrivKey(data []byte) error {
     return err
 }
 
-func (am *AuthManager) GetToxKey() ([]byte, error) {
-    if am.db == nil {
-        return nil, fmt.Errorf("database is not open")
-    }
-    if am.toxKey == nil {
-        return nil, nil
-    }
-    return am.toxKey, nil
-}
+//TOX DISABLED!!!
+//
+//func (am *AuthManager) GetToxKey() ([]byte, error) {
+//    if am.db == nil {
+//        return nil, fmt.Errorf("database is not open")
+//    }
+//    if am.toxKey == nil {
+//        return nil, nil
+//    }
+//    return am.toxKey, nil
+//}//
 
-func (am *AuthManager) SetToxKey(data []byte) error {
-    if am.db == nil {
-        return fmt.Errorf("database is not open")
-    }
-    am.toxKey = data
-    _, err := am.db.Exec("UPDATE auth SET tox_key = ?", data)
-    return err
-}
+//func (am *AuthManager) SetToxKey(data []byte) error {
+//    if am.db == nil {
+//        return fmt.Errorf("database is not open")
+//    }
+//    am.toxKey = data
+//    _, err := am.db.Exec("UPDATE auth SET tox_key = ?", data)
+//    return err
+//}//
 
-func (am *AuthManager) GetToxSave() ([]byte, error) {
-    if am.db == nil {
-        return nil, fmt.Errorf("database is not open")
-    }
-    if am.toxSave == nil {
-        return nil, nil
-    }
-    return am.toxSave, nil
-}
+//func (am *AuthManager) GetToxSave() ([]byte, error) {
+//    if am.db == nil {
+//        return nil, fmt.Errorf("database is not open")
+//    }
+//    if am.toxSave == nil {
+//        return nil, nil
+//    }
+//    return am.toxSave, nil
+//}//
 
-func (am *AuthManager) SetToxSave(data []byte) error {
-    if am.db == nil {
-        return fmt.Errorf("database is not open")
-    }
-    am.toxSave = data
-    _, err := am.db.Exec("UPDATE auth SET tox_save = ?", data)
-    return err
-}
+//func (am *AuthManager) SetToxSave(data []byte) error {
+//    if am.db == nil {
+//        return fmt.Errorf("database is not open")
+//    }
+//    am.toxSave = data
+//    _, err := am.db.Exec("UPDATE auth SET tox_save = ?", data)
+//    return err
+//}
+//
+//TOX DISABLED!!!
 
 func (am *AuthManager) ChangePassword(oldPassword, newPassword string) error {
     if _, err := os.Stat(am.dbPath); os.IsNotExist(err) {

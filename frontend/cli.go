@@ -5,6 +5,7 @@ import (
     "bufio"
     "encoding/json"
     "fmt"
+    "unsafe" 
     "log"
     "os"
     "path/filepath"
@@ -34,8 +35,24 @@ func CallClear() {
     cmd.Run()
 }
 
+func SetTitle(title string) {
+    if runtime.GOOS == "windows" {
+        kernel32 := syscall.NewLazyDLL("kernel32.dll")
+        proc := kernel32.NewProc("SetConsoleTitleW")
+        titleUTF16, err := syscall.UTF16PtrFromString(title)
+        if err != nil {
+            _ = exec.Command("cmd", "/c", "title", title).Run()
+            return
+        }
+        proc.Call(uintptr(unsafe.Pointer(titleUTF16)))
+    } else {
+        fmt.Printf("\033]0;%s\007", title)
+    }
+}
+
 func RunCLI(proxyURL string) {
     CallClear()
+    SetTitle("Gramium CLI Client") 
     fmt.Print(" ██████╗ ██████╗  █████╗ ███╗   ███╗██╗██╗   ██╗███╗   ███╗\n")
     fmt.Print("██╔════╝ ██╔══██╗██╔══██╗████╗ ████║██║██║   ██║████╗ ████║\n")
     fmt.Print("██║  ███╗██████╔╝███████║██╔████╔██║██║██║   ██║██╔████╔██║\n")
@@ -84,7 +101,11 @@ func RunCLI(proxyURL string) {
     if data, err := os.ReadFile(metaFile); err == nil {
         json.Unmarshal(data, meta)
     }
-
+    fd := int(syscall.Stdin)
+    origState, err := term.GetState(fd)
+    if err != nil {
+        origState = nil // игнорируем ошибку, работаем как есть
+    }
     if isNewDB {
         fmt.Println("[AUTH] Welcome to Gramium!")
         fmt.Print("Enter your username (account meta): ")
@@ -197,7 +218,21 @@ func RunCLI(proxyURL string) {
         }
     }
 
+    if origState != nil {
+        if err := term.Restore(fd, origState); err != nil {
+        }
+    }   
+
+    if runtime.GOOS == "windows" {
+        _ = exec.Command("mode", "con:", "echo=on").Run()
+    } else {
+        _ = exec.Command("stty", "echo").Run()
+    }   
+
+    fmt.Print("\033[?25h")
+
     CallClear()
+
     fmt.Print(" ██████╗ ██████╗  █████╗ ███╗   ███╗██╗██╗   ██╗███╗   ███╗\n")
     fmt.Print("██╔════╝ ██╔══██╗██╔══██╗████╗ ████║██║██║   ██║████╗ ████║\n")
     fmt.Print("██║  ███╗██████╔╝███████║██╔████╔██║██║██║   ██║██╔████╔██║\n")

@@ -1,25 +1,25 @@
 # Gramium — Decentralized Messenger
 
-**Gramium** is a secure, modular client for decentralized messaging.  
-The project is under active development; the current version ships with a fully functional **CLI interface** and a completely disabled graphical mode (GUI).  
+**Gramium** is a secure, decentralized messenger built on libp2p.  
+The project is under active development. The current version provides a fully functional **CLI interface** (GUI is disabled).  
 
-The codebase includes remnants of **Tox** protocol support, which is currently disabled but kept as commented fragments for future use.
+The codebase contains commented fragments related to the **Tox** protocol, but **Tox support is completely disabled** and will be reconsidered in the future.
 
 ---
 
 ## ✨ Features
 
-- **Fully encrypted local storage** — all data (contacts, messages, keys) is stored in an **SQLite** database encrypted with **AES‑GCM** and **Argon2**.
+- **Fully encrypted local storage** — all data (contacts, messages, keys) is stored in an SQLite database encrypted with **AES‑256‑GCM**.
 - **Three authentication methods**:
   1. Master password
   2. Login + password
-  3. Seed phrase (BIP‑39, 12 words)
+  3. BIP‑39 seed phrase (12 words)
 - **Two network modes**:
   - `speed` — fast operation with NAT port mapping and hole punching
-  - `anonymity` — enhanced anonymity via relay and auto-relay (traffic goes through relays)
-- **Proxy support** — HTTP/HTTPS/SOCKS5 proxy for all network traffic (including IP queries).
-- **Peer‑to‑Peer** based on **libp2p** with DHT (Kademlia) and **Noise** secure channel.
-- **Contact and message management commands** — add, remove, view profiles, message history.
+  - `anonymity` — enhanced anonymity via relays (Relay, AutoRelay)
+- **Proxy support** — HTTP/HTTPS/SOCKS5 (all traffic goes through the specified proxy)
+- **Peer‑to‑Peer** based on **libp2p** with DHT (Kademlia) and secure **Noise** transport.
+- **Contact and message management** — add, remove, view profiles, message history.
 - **Public IP information** with geolocation, region, ISP, and timezone (via free `ip-api.com` API).
 - **Built-in password change** (for methods 1 and 2).
 - **Complete data purge** (wipe) with password confirmation — a "nuclear" reset function.
@@ -36,16 +36,24 @@ The codebase includes remnants of **Tox** protocol support, which is currently d
   - `github.com/sirupsen/logrus`
   - `github.com/tyler-smith/go-bip39`
   - `golang.org/x/term`
-  - `modernc.org/sqlite` (SQLite driver)
+  - `modernc.org/sqlite`
 
 ### Build
 ```bash
 git clone https://github.com/MirasakaDrakon/gramium.git
 cd gramium
-go build -o gramium
+go mod tidy
+go build -o gramium ./frontend
 ```
-
 The resulting binary `gramium` (or `gramium.exe` on Windows) is ready to run.
+
+You can start without building:
+```bash
+git clone https://github.com/MirasakaDrakon/gramium.git
+cd gramium
+go mod tidy
+go run ./frontend -cli
+```
 
 ---
 
@@ -57,14 +65,14 @@ The resulting binary `gramium` (or `gramium.exe` on Windows) is ready to run.
 ./gramium -cli
 ```
 
-The `-cli` flag is mandatory because the GUI mode is currently disabled.
+The `-cli` flag is mandatory because GUI mode is currently disabled.
 
 ### Proxy
-If needed, you can specify a proxy server:
+If needed, specify a proxy server:
 ```bash
-./gramium -cli -proxy=socks5://127.0.0.1:1080
+./gramium -cli --proxy=socks5://127.0.0.1:1080
 # or
-./gramium -cli -proxy=http://proxy.example.com:8080
+./gramium -cli --proxy=http://proxy.example.com:8080
 ```
 
 ### First run
@@ -82,7 +90,7 @@ On the first run, the program will:
 
 ## ⌨️ Available CLI Commands
 
-All commands are entered in interactive mode after startup. The prefix `/` is mandatory for system commands (except `/help`).
+All commands are entered in interactive mode after startup. The prefix `/` is mandatory for system commands.
 
 ### 📘 Basic Commands
 
@@ -128,7 +136,7 @@ All commands are entered in interactive mode after startup. The prefix `/` is ma
 
 ## 🧩 Project Architecture
 
-The project consists of three main parts (files/packages):
+The project consists of three main parts:
 
 1. **`main.go`** — entry point. Parses flags and launches the CLI (or prints a message about GUI being unimplemented).
 2. **`cli.go`** — CLI implementation: banner rendering, authentication, command reading, and dispatching to core methods.
@@ -174,8 +182,8 @@ Select an authentication method:
   2. Login + password
   3. Seed phrase (BIP-39, 12 words)
 Your choice (1-3): 1
-Create a master key (password): 
-Repeat the master key: 
+Create a master key (password):
+Repeat the master key:
 [OK] Database created and encrypted
 
 > /me
@@ -184,7 +192,7 @@ Repeat the master key:
 [STATUS] Status: online
 [CLIENT] Client: Gramium-Genesis-CLI v1.0.0
 
-> /add Bob 12D3KooW... 
+> /add Bob 12D3KooW...
 [OK] Contact added: Bob
 
 > /send Bob "Hello from Gramium!"
@@ -205,8 +213,8 @@ Repeat the master key:
 
 ## 🛠 Development & Extending
 
-### Adding a new protocol
-The code contains commented blocks related to Tox. To enable Tox, you need to:
+### Enabling Tox
+The code contains commented blocks related to Tox. To enable Tox, you would need to:
 1. Uncomment the relevant imports, `Node` struct fields, and methods.
 2. Implement or import the `tox` package (currently missing).
 3. Add handling of the `tox:` prefix in `/add` and `/send` commands.
@@ -221,16 +229,16 @@ Logs are written to `~/.gramium/gramium.log` in text format with full timestamps
 
 ## 📄 License
 
-The project is distributed under the **MIT** license (unless otherwise stated in the LICENSE file).  
-The author reserves the right to change the license terms in future versions.
+This project is distributed under the **GNU General Public License v3.0** (GPL‑3.0).  
+See the [LICENSE](LICENSE) file for full details.
 
 ---
 
 ## 🤝 Contributing & Contact
 
-We welcome any suggestions, bug reports, and pull requests.  
-For communication with developers, please use the [Issues](https://github.com/yourusername/gramium/issues) section on GitHub.
+We welcome suggestions, bug reports, and pull requests.  
+For communication with developers, please use the [Issues](https://github.com/MirasakaDrakon/gramium/issues) section on GitHub.
 
 ---
 
-**Gramium** is a project that strives to combine security, ease of use, and decentralization. Join the development!
+**Gramium** — secure, simple, decentralized. Join the development!

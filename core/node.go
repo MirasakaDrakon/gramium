@@ -6,9 +6,11 @@ import (
     "io"
     "net/http"
     "context"
+    "path/filepath"
     "crypto/rand"
     "database/sql"
     "fmt"
+    "sync"
     "math/big"
     "strings"
     "time"
@@ -22,6 +24,52 @@ import (
     "github.com/libp2p/go-libp2p/p2p/security/noise"
     "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 )
+
+type StatusInfo struct {
+    PeerID          string
+    Mode            string
+    BootstrapTotal  int
+    BootstrapOK     int
+    BootstrapFailed int
+    ConnectedAddrs  []string
+    FailedAddrs     []string
+    ContactsCount   int
+    DHTStarted      bool
+}
+
+func (n *Node) GetStatus() *StatusInfo {
+    n.bootstrapMutex.Lock()
+    defer n.bootstrapMutex.Unlock()
+
+    var okAddrs, failAddrs []string
+    total := len(n.bootstrapStatus)
+    okCount := 0
+    for addr, connected := range n.bootstrapStatus {
+        if connected {
+            okAddrs = append(okAddrs, addr)
+            okCount++
+        } else {
+            failAddrs = append(failAddrs, addr)
+        }
+    }
+
+    var contacts int
+    if n.DB != nil {
+        _ = n.DB.QueryRow("SELECT COUNT(*) FROM contacts").Scan(&contacts)
+    }
+
+    return &StatusInfo{
+        PeerID:          n.PeerID.String(),
+        Mode:            n.Cfg.Mode,
+        BootstrapTotal:  total,
+        BootstrapOK:     okCount,
+        BootstrapFailed: total - okCount,
+        ConnectedAddrs:  okAddrs,
+        FailedAddrs:     failAddrs,
+        ContactsCount:   contacts,
+        DHTStarted:      n.Dht != nil,
+    }
+}
 
 type IPInfo struct {
     Status      string  `json:"status"`
@@ -69,6 +117,8 @@ type Node struct {
     PrivKey      crypto.PrivKey
     PubKey       crypto.PubKey
     MyMeta       *PeerMeta
+    bootstrapStatus map[string]bool
+    bootstrapMutex  sync.Mutex
     //TOX DISABLED!!!
     //
     //ToxNode      *ToxNode
@@ -105,9 +155,25 @@ func (n *Node) GetIPInfo() (*IPInfo, error) {
     return &info, nil
 }
 
+func (n *Node) ExportDecryptedDB(password string) error {
+    home, err := os.UserHomeDir()
+    if err != nil {
+        return fmt.Errorf("failed to get home dir: %w", err)
+    }
+    decryptedDir := filepath.Join(home, ".gramium", "decrypted")
+    outputPath := filepath.Join(decryptedDir, "gramium.db")
+    return n.AuthManager.ExportDecryptedDatabase(password, outputPath)
+}
+
 func NewNode(cfg *Config, password string, meta *PeerMeta) (*Node, error) {
     ctx, cancel := context.WithCancel(context.Background())
-    n := &Node{ctx: ctx, cancel: cancel, Cfg: cfg, dbPath: cfg.DBPath}
+    n := &Node{
+        ctx:             ctx,
+        cancel:          cancel,
+        Cfg:             cfg,
+        dbPath:          cfg.DBPath,
+        bootstrapStatus: make(map[string]bool), 
+    }
 
     if cfg.ProxyURL != "" {
         os.Setenv("HTTP_PROXY", cfg.ProxyURL)
@@ -197,7 +263,10 @@ func (n *Node) loadOrGenerateKeysFromDB() error {
 func (n *Node) setupHost() error {
     opts := []libp2p.Option{
         libp2p.Identity(n.PrivKey),
-        libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"),
+        libp2p.ListenAddrStrings(
+            "/ip4/0.0.0.0/tcp/0",
+            "/ip6/::/tcp/0",
+        ),
         libp2p.Security(noise.ID, noise.New),
         libp2p.Transport(tcp.NewTCPTransport),
     }
@@ -221,28 +290,85 @@ func (n *Node) setupHost() error {
     return nil
 }
 
+func (n *Node) LoadBootstrapPeersFromDB() ([]string, error) {
+    rows, err := n.DB.Query("SELECT address FROM bootstrap_peers ORDER BY id")
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+    var peers []string
+    for rows.Next() {
+        var addr string
+        if err := rows.Scan(&addr); err != nil {
+            return nil, err
+        }
+        peers = append(peers, addr)
+    }
+    return peers, nil
+}
+
+func (n *Node) AddBootstrapPeer(addr string) error {
+    _, err := n.DB.Exec("INSERT OR IGNORE INTO bootstrap_peers (address, added_at) VALUES (?, ?)", addr, time.Now().Unix())
+    return err
+}
+
+func (n *Node) RemoveBootstrapPeer(addr string) error {
+    _, err := n.DB.Exec("DELETE FROM bootstrap_peers WHERE address = ?", addr)
+    return err
+}
+
+func (n *Node) ListBootstrapPeers() ([]string, error) {
+    return n.LoadBootstrapPeersFromDB()
+}
+
 func (n *Node) setupDHT() error {
+    fmt.Print("[INFO] Connecting to bootstrap nodes, please wait...\n")
     dhtInstance, err := dht.New(n.ctx, n.Host)
     if err != nil {
         return err
     }
     n.Dht = dhtInstance
-    bootstrapPeers := []string{
-        "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-    }
-    for _, addr := range bootstrapPeers {
+
+    peers, err := n.LoadBootstrapPeersFromDB()
+    if err != nil {
+        peers = []string{
+            "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+            "/ip4/104.236.179.241/tcp/4001/p2p/QmSoLPppuBtQSGwKDZT2M73ULpjvfd3aZ6ha4oFGL1KrGM",
+            "/ip4/128.199.219.111/tcp/4001/p2p/QmSoLSafTMBsPKadTEgaXctDQVcqN88CNLHXMkTNwMKPnu",
+            "/ip4/104.236.76.40/tcp/4001/p2p/QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64",
+            "/ip4/178.62.158.247/tcp/4001/p2p/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd",
+            "/ip4/144.76.46.99/tcp/4001/p2p/QmSoLpPVmHKQ4XTPdz8tjDFgdeRWkpZd8ZkvWLxqR9jt2a",
+            "/ip4/138.201.67.219/tcp/4001/p2p/QmSoLSafTMBsPKadTEgaXctDQVcqN88CNLHXMkTNwMKPnu",
+            "/ip6/2604:a880:1:20::203:d001/tcp/4001/p2p/QmSoLPppuBtQSGwKDZT2M73ULpjvfd3aZ6ha4oFGL1KrGM",
+            "/ip6/2400:6180:0:d0::151:6001/tcp/4001/p2p/QmSoLSafTMBsPKadTEgaXctDQVcqN88CNLHXMkTNwMKPnu",
+            "/ip6/2604:a880:800:10::4a:5001/tcp/4001/p2p/QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64",
+            "/ip6/2a03:b0c0:0:1010::23:1001/tcp/4001/p2p/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd",
+            "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+            "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+            "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+        }
+    }  
+
+    for _, addr := range peers {
         info, err := peer.AddrInfoFromString(addr)
         if err != nil {
-            fmt.Println("Error parsing bootstrap address:", err)
+            n.recordBootstrapStatus(addr, false)
             continue
         }
         if err := n.Host.Connect(n.ctx, *info); err != nil {
-            fmt.Println("Failed to connect to bootstrap node:", err)
+            n.recordBootstrapStatus(addr, false)
         } else {
-            fmt.Println("Connected to bootstrap node:", addr)
+            n.recordBootstrapStatus(addr, true)
         }
     }
     return nil
+}
+
+func (n *Node) recordBootstrapStatus(addr string, ok bool) {
+    n.bootstrapMutex.Lock()
+    defer n.bootstrapMutex.Unlock()
+    n.bootstrapStatus[addr] = ok
 }
 
 func (n *Node) initDB() error {
@@ -495,6 +621,24 @@ func (n *Node) handleStream(stream network.Stream) {
         }
     }
     tx.Commit()
+}
+
+func (n *Node) SaveMyMeta(meta *PeerMeta) error {
+    if n.DB == nil {
+        return fmt.Errorf("database is not open")
+    }
+    featuresJSON, _ := json.Marshal(meta.Features)
+    _, err := n.DB.Exec(`
+        UPDATE auth SET 
+            username = ?,
+            display_name = ?,
+            bio = ?,
+            avatar_hash = ?,
+            status = ?,
+            features = ?
+        WHERE id = 1
+    `, meta.Username, meta.DisplayName, meta.Bio, meta.AvatarHash, meta.Status, string(featuresJSON))
+    return err
 }
 
 func (n *Node) GetPeerID() string {

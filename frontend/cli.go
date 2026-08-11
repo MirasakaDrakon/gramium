@@ -3,7 +3,6 @@ package main
 
 import (
     "bufio"
-    "encoding/json"
     "fmt"
     "unsafe" 
     "log"
@@ -81,7 +80,6 @@ func RunCLI(proxyURL string) {
     }
 
     dbPath := filepath.Join(home, ".gramium", "encrypted-gramium.db")
-    metaFile := filepath.Join(home, ".gramium", "meta.json")
     os.MkdirAll(filepath.Join(home, ".gramium"), 0700)
 
     var isNewDB bool
@@ -98,13 +96,11 @@ func RunCLI(proxyURL string) {
         ClientVersion: "1.0.0",
         Status:        "online",
     }
-    if data, err := os.ReadFile(metaFile); err == nil {
-        json.Unmarshal(data, meta)
-    }
+
     fd := int(syscall.Stdin)
     origState, err := term.GetState(fd)
     if err != nil {
-        origState = nil // игнорируем ошибку, работаем как есть
+        origState = nil
     }
     if isNewDB {
         fmt.Println("[AUTH] Welcome to Gramium!")
@@ -174,9 +170,6 @@ func RunCLI(proxyURL string) {
             password = mnemonic
         }
 
-        data, _ := json.Marshal(meta)
-        os.WriteFile(metaFile, data, 0600)
-
         if err := authManager.CreateDatabase(password, meta, method); err != nil {
             fmt.Printf("[ERROR] Database creation failed: %v\n", err)
             os.Exit(1)
@@ -211,10 +204,6 @@ func RunCLI(proxyURL string) {
             fmt.Print("[AUTH] Enter seed phrase (12 words): ")
             scanner.Scan()
             password = strings.TrimSpace(scanner.Text())
-        }
-
-        if data, err := os.ReadFile(metaFile); err == nil {
-            json.Unmarshal(data, meta)
         }
     }
 
@@ -288,9 +277,6 @@ func RunCLI(proxyURL string) {
   ───────────────
     /help                     – show this help
     /exit                     – quit the application
-    /ip                       – show your public IP with detailed geolocation
-                                (country, region, city, coordinates, ISP, AS, TZ)
-                                If a proxy is active, the IP of the exit node is shown.
 
   PROFILE & SETTINGS
   ──────────────────
@@ -301,6 +287,8 @@ func RunCLI(proxyURL string) {
     /changepass               – change your master password (methods 1 and 2 only)
     /switch <mode>            – switch network mode: speed or anonymity.
                                 Affects libp2p NAT, relay and hole punching.
+
+    /status                   – show node status (peer ID, bootstrap connections, etc.)
 
   CONTACT MANAGEMENT
   ──────────────────
@@ -316,7 +304,6 @@ func RunCLI(proxyURL string) {
     /list                     – show all contacts with names, statuses and IDs
     /whois <name_or_id>       – show detailed info for a contact
     /remove <name_or_id>      – delete a contact and all message history
-    /debug                    – dump raw contacts table (id, username, peer_id, tox_id)
 
   MESSAGING
   ──────────
@@ -325,10 +312,21 @@ func RunCLI(proxyURL string) {
                                 Example: /send Alice "Hello, world!"
     /history <contact> [n]    – show last n messages (default 20) with a contact
 
+  BOOTSTRAP NODES
+  ────────────────
+    /bootstrap list          – show all configured bootstrap peers
+    /bootstrap add <addr>    – add a new bootstrap peer (multiaddress)
+    /bootstrap remove <addr> – remove a bootstrap peer
+
   DANGEROUS
   ──────────
     /purge                    – DELETE ALL DATA: contacts, messages, keys, encrypted DB.
                                 Requires password confirmation and exits after completion.
+    /decryptdb                 – decrypt the database and save as plain SQLite file
+                                to ~/.gramium/decrypted/gramium.db (password required)
+    /ip                       – show your public IP with detailed geolocation
+                                (country, region, city, coordinates, ISP, AS, TZ)
+                                If a proxy is active, the IP of the exit node is shown.
 
 ╔═══════════════════════════════════════════════════════════════════════════════╗
 ║  NOTES                                                                        ║
@@ -392,9 +390,58 @@ func RunCLI(proxyURL string) {
                 continue
             }
             node.SetMyMeta(m)
-            data, _ := json.Marshal(m)
-            os.WriteFile(metaFile, data, 0600)
-            fmt.Println("[OK] Metadata updated")
+            if err := node.SaveMyMeta(m); err != nil { // <-- сохраняем в БД
+                fmt.Printf("[ERROR] Failed to save metadata to DB: %v\n", err)
+            } else {
+                fmt.Println("[OK] Metadata updated")
+            }
+
+        case "/bootstrap":
+            if len(fields) < 2 {
+                fmt.Println("[ERROR] Usage: /bootstrap <list|add|remove> [address]")
+                continue
+            }
+            subcmd := fields[1]
+            switch subcmd {
+            case "list":
+                peers, err := node.ListBootstrapPeers()
+                if err != nil {
+                    fmt.Printf("[ERROR] Failed to list bootstrap peers: %v\n", err)
+                    continue
+                }
+                if len(peers) == 0 {
+                    fmt.Println("[INFO] No bootstrap peers configured")
+                } else {
+                    fmt.Println("[BOOTSTRAP] Peers:")
+                    for i, p := range peers {
+                        fmt.Printf("  %d. %s\n", i+1, p)
+                    }
+                }
+            case "add":
+                if len(fields) < 3 {
+                    fmt.Println("[ERROR] Usage: /bootstrap add <multiaddr>")
+                    continue
+                }
+                addr := fields[2]
+                if err := node.AddBootstrapPeer(addr); err != nil {
+                    fmt.Printf("[ERROR] Failed to add bootstrap peer: %v\n", err)
+                } else {
+                    fmt.Println("[OK] Bootstrap peer added")
+                }
+            case "remove":
+                if len(fields) < 3 {
+                    fmt.Println("[ERROR] Usage: /bootstrap remove <multiaddr>")
+                    continue
+                }
+                addr := fields[2]
+                if err := node.RemoveBootstrapPeer(addr); err != nil {
+                    fmt.Printf("[ERROR] Failed to remove bootstrap peer: %v\n", err)
+                } else {
+                    fmt.Println("[OK] Bootstrap peer removed")
+                }
+            default:
+                fmt.Println("[ERROR] Unknown bootstrap subcommand. Use list, add, remove")
+            }
 
         case "/changepass":
             method, err := node.AuthManager.LoadAuthMeta()
@@ -643,6 +690,28 @@ func RunCLI(proxyURL string) {
 
             fmt.Println("[IP]", output)
 
+        case "/status":
+            info := node.GetStatus()
+            fmt.Println("=== NODE STATUS ===")
+            fmt.Printf("Peer ID:      %s\n", info.PeerID)
+            fmt.Printf("Mode:         %s\n", info.Mode)
+            fmt.Printf("DHT running:  %v\n", info.DHTStarted)
+            fmt.Printf("Contacts:     %d\n", info.ContactsCount)
+            fmt.Printf("Bootstrap peers: %d total, %d connected, %d failed\n",
+                info.BootstrapTotal, info.BootstrapOK, info.BootstrapFailed)
+            if len(info.ConnectedAddrs) > 0 {
+                fmt.Println("  Connected:")
+                for _, addr := range info.ConnectedAddrs {
+                    fmt.Printf("    [ONLINE] %s\n", addr)
+                }
+            }
+            if len(info.FailedAddrs) > 0 {
+                fmt.Println("  Failed:")
+                for _, addr := range info.FailedAddrs {
+                    fmt.Printf("    [OFFLINE] %s\n", addr)
+                }
+            }
+
         case "/history":
             if len(fields) < 2 {
                 fmt.Println("[ERROR] Usage: /history <contact> [count]")
@@ -723,15 +792,48 @@ func RunCLI(proxyURL string) {
                 fmt.Println("[OK] Contact removed")
             }
 
-        case "/debug":
-            lines, err := node.DebugContacts()
+        //case "/debug":
+        //    lines, err := node.DebugContacts()
+        //    if err != nil {
+        //        fmt.Printf("[ERROR] %v\n", err)
+        //        continue
+        //    }
+        //    fmt.Println("[DEBUG] Contacts table contents:")
+        //    for _, l := range lines {
+        //        fmt.Println("  ", l)
+        //    }
+
+        case "/decryptdb":
+            method, err := node.AuthManager.LoadAuthMeta()
             if err != nil {
-                fmt.Printf("[ERROR] %v\n", err)
+                fmt.Println("[ERROR] Failed to determine authentication method:", err)
                 continue
             }
-            fmt.Println("[DEBUG] Contacts table contents:")
-            for _, l := range lines {
-                fmt.Println("  ", l)
+            var exportPassword string
+            switch method {
+            case 1:
+                fmt.Print("[AUTH] Enter master key: ")
+                pw, _ := term.ReadPassword(int(syscall.Stdin))
+                fmt.Println()
+                exportPassword = string(pw)
+            case 2:
+                fmt.Print("[AUTH] Enter login: ")
+                scanner.Scan()
+                login := strings.TrimSpace(scanner.Text())
+                fmt.Print("[AUTH] Enter password: ")
+                pw, _ := term.ReadPassword(int(syscall.Stdin))
+                fmt.Println()
+                exportPassword = login + ";" + string(pw)
+            case 3:
+                fmt.Print("[AUTH] Enter seed phrase: ")
+                scanner.Scan()
+                exportPassword = strings.TrimSpace(scanner.Text())
+            }
+            if err := node.ExportDecryptedDB(exportPassword); err != nil {
+                fmt.Printf("[ERROR] Export failed: %v\n", err)
+            } else {
+                home, _ := os.UserHomeDir()
+                fmt.Printf("[OK] Database exported to: %s/.gramium/decrypted/gramium.db\n", home)
             }
 
         case "/purge":
@@ -782,7 +884,7 @@ func RunCLI(proxyURL string) {
             fmt.Println("[OK] All data deleted. Program will exit.")
             node.Stop()
             return
-
+        
         case "/exit":
             fmt.Println("[INFO] Goodbye!")
             return

@@ -3,18 +3,20 @@ package core
 
 import (
     "encoding/json"
+    "crypto/sha256"
+    "encoding/hex"
     "io"
-    "net/http"
     "context"
     "path/filepath"
     "crypto/rand"
     "database/sql"
     "fmt"
     "sync"
-    "math/big"
     "strings"
     "time"
     "os"
+    "encoding/binary"
+    "net"
     "github.com/libp2p/go-libp2p"
     "github.com/libp2p/go-libp2p-kad-dht"
     "github.com/libp2p/go-libp2p/core/crypto"
@@ -23,6 +25,16 @@ import (
     "github.com/libp2p/go-libp2p/core/peer"
     "github.com/libp2p/go-libp2p/p2p/security/noise"
     "github.com/libp2p/go-libp2p/p2p/transport/tcp"
+    "github.com/libp2p/go-libp2p/p2p/net/connmgr"
+)
+
+const (
+    MaxMessageSize      = 8192               
+    ReadTimeout         = 30 * time.Second  
+    WriteTimeout        = 30 * time.Second  
+    MaxConnections      = 100               
+    MaxStreamsPerPeer   = 5                  
+    MaxMessagesPerPeer  = 10                 
 )
 
 type StatusInfo struct {
@@ -130,29 +142,52 @@ type Node struct {
 }
 
 func (n *Node) GetIPInfo() (*IPInfo, error) {
-    client := &http.Client{Timeout: 10 * time.Second}
-    
-    resp, err := client.Get("http://ip-api.com/json")
+    addrs, err := net.InterfaceAddrs()
     if err != nil {
         return nil, err
     }
-    defer resp.Body.Close()
-    
-    body, err := io.ReadAll(resp.Body)
-    if err != nil {
+    var ips []string
+    for _, addr := range addrs {
+        if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
+            ips = append(ips, ipNet.IP.String())
+        }
+    }
+    if len(ips) == 0 {
+        return nil, fmt.Errorf("no non-loopback IPv4 addresses found")
+    }
+    return &IPInfo{
+        Status: "success",
+        Query:  strings.Join(ips, ", "),
+    }, nil
+}
+
+func writeMessage(w io.Writer, data []byte) error {
+    if len(data) > MaxMessageSize {
+        return fmt.Errorf("message too large: %d bytes (max %d)", len(data), MaxMessageSize)
+    }
+    lenBuf := make([]byte, 4)
+    binary.BigEndian.PutUint32(lenBuf, uint32(len(data)))
+    if _, err := w.Write(lenBuf); err != nil {
+        return err
+    }
+    _, err := w.Write(data)
+    return err
+}
+
+func readMessage(r io.Reader) ([]byte, error) {
+    lenBuf := make([]byte, 4)
+    if _, err := io.ReadFull(r, lenBuf); err != nil {
         return nil, err
     }
-    
-    var info IPInfo
-    if err := json.Unmarshal(body, &info); err != nil {
+    length := binary.BigEndian.Uint32(lenBuf)
+    if length > MaxMessageSize {
+        return nil, fmt.Errorf("message too large: %d bytes", length)
+    }
+    data := make([]byte, length)
+    if _, err := io.ReadFull(r, data); err != nil {
         return nil, err
     }
-    
-    if info.Status != "success" {
-        return nil, fmt.Errorf("API returned status: %s", info.Status)
-    }
-    
-    return &info, nil
+    return data, nil
 }
 
 func (n *Node) ExportDecryptedDB(password string) error {
@@ -163,6 +198,12 @@ func (n *Node) ExportDecryptedDB(password string) error {
     decryptedDir := filepath.Join(home, ".gramium", "decrypted")
     outputPath := filepath.Join(decryptedDir, "gramium.db")
     return n.AuthManager.ExportDecryptedDatabase(password, outputPath)
+}
+
+func (n *Node) computeMessageHash(prevHash string, contactID int, isOutgoing bool, message string, timestamp int64, protocol string) string {
+    data := fmt.Sprintf("%s|%d|%v|%s|%d|%s", prevHash, contactID, isOutgoing, message, timestamp, protocol)
+    h := sha256.Sum256([]byte(data))
+    return hex.EncodeToString(h[:])
 }
 
 func NewNode(cfg *Config, password string, meta *PeerMeta) (*Node, error) {
@@ -261,6 +302,15 @@ func (n *Node) loadOrGenerateKeysFromDB() error {
 }
 
 func (n *Node) setupHost() error {
+    cm, err := connmgr.NewConnManager(
+        int(MaxConnections/2), 
+        int(MaxConnections),   
+        connmgr.WithGracePeriod(time.Minute),
+    )
+    if err != nil {
+        return err
+    }
+
     opts := []libp2p.Option{
         libp2p.Identity(n.PrivKey),
         libp2p.ListenAddrStrings(
@@ -269,7 +319,9 @@ func (n *Node) setupHost() error {
         ),
         libp2p.Security(noise.ID, noise.New),
         libp2p.Transport(tcp.NewTCPTransport),
+        libp2p.ConnectionManager(cm), 
     }
+
     if n.Cfg.Mode == "anonymity" {
         opts = append(opts,
             libp2p.EnableRelay(),
@@ -282,6 +334,7 @@ func (n *Node) setupHost() error {
             libp2p.EnableHolePunching(),
         )
     }
+
     h, err := libp2p.New(opts...)
     if err != nil {
         return err
@@ -398,6 +451,35 @@ func (n *Node) initDB() error {
     return err
 }
 
+func (n *Node) VerifyIntegrity() error {
+    rows, err := n.DB.Query("SELECT id, contact_id, is_outgoing, message, timestamp, protocol, hash, prev_hash FROM messages ORDER BY id")
+    if err != nil {
+        return err
+    }
+    defer rows.Close()
+
+    var prevHash string
+    for rows.Next() {
+        var id, contactID int
+        var isOutgoing bool
+        var message, protocol, hash, prevHashStr string
+        var timestamp int64
+        err := rows.Scan(&id, &contactID, &isOutgoing, &message, &timestamp, &protocol, &hash, &prevHashStr)
+        if err != nil {
+            return err
+        }
+        if prevHashStr != prevHash {
+            return fmt.Errorf("integrity violation at message id %d: prev_hash mismatch (expected %s, got %s)", id, prevHash, prevHashStr)
+        }
+        expectedHash := n.computeMessageHash(prevHash, contactID, isOutgoing, message, timestamp, protocol)
+        if hash != expectedHash {
+            return fmt.Errorf("integrity violation at message id %d: hash mismatch (expected %s, got %s)", id, expectedHash, hash)
+        }
+        prevHash = hash
+    }
+    return nil
+}
+
 func (n *Node) ResolveContact(identifier string) (string, string, error) {
     var peerIDStr, toxIDStr string
     row := n.DB.QueryRow("SELECT peer_id, tox_id FROM contacts WHERE username = ? OR peer_id = ? OR tox_id = ?", identifier, identifier, identifier)
@@ -500,16 +582,29 @@ func (n *Node) SendMessage(to string, data []byte, protocol string) error {
 }
 
 func (n *Node) sendGramiumMessage(to string, data []byte) error {
+    if len(data) > MaxMessageSize {
+        return fmt.Errorf("message too large: %d bytes (max %d)", len(data), MaxMessageSize)
+    }
+
     addrInfo, err := n.resolveGramiumContact(to)
     if err != nil {
         return err
     }
+
     stream, err := n.Host.NewStream(n.ctx, addrInfo.ID, "/gramium/1.0.0")
     if err != nil {
         return err
     }
     defer stream.Close()
+
+    if err := stream.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
+        return err
+    }
     if err := n.sendHandshake(stream); err != nil {
+        return err
+    }
+
+    if err := stream.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
         return err
     }
     remoteMeta, err := n.readHandshake(stream)
@@ -517,16 +612,45 @@ func (n *Node) sendGramiumMessage(to string, data []byte) error {
         return err
     }
     n.updateContactMeta(addrInfo.ID.String(), "", remoteMeta)
-    if n.Cfg.Mode == "anonymity" {
-        delay, _ := rand.Int(rand.Reader, big.NewInt(4500))
-        time.Sleep(time.Duration(delay.Int64()+500) * time.Millisecond)
-        padded := make([]byte, 1024)
-        copy(padded, data)
-        rand.Read(padded[len(data):])
-        data = padded
+
+    if err := stream.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
+        return err
     }
-    _, err = stream.Write(data)
-    return err
+    if err := writeMessage(stream, data); err != nil {
+        return err
+    }
+
+    if n.DB != nil {
+        var contactID int
+        err := n.DB.QueryRow("SELECT id FROM contacts WHERE peer_id = ? OR username = ?", to, to).Scan(&contactID)
+        if err == nil && contactID > 0 {
+            tx, err := n.DB.Begin()
+            if err == nil {
+                var lastHash sql.NullString
+                err = tx.QueryRow("SELECT hash FROM messages ORDER BY id DESC LIMIT 1").Scan(&lastHash)
+                if err != nil && err != sql.ErrNoRows {
+                    tx.Rollback()
+                } else {
+                    prevHash := ""
+                    if lastHash.Valid {
+                        prevHash = lastHash.String
+                    }
+                    timestamp := time.Now().Unix()
+                    newHash := n.computeMessageHash(prevHash, contactID, true, string(data), timestamp, "gramium")
+                    _, err = tx.Exec(`
+                        INSERT INTO messages (contact_id, is_outgoing, message, timestamp, protocol, hash, prev_hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    `, contactID, true, string(data), timestamp, "gramium", newHash, prevHash)
+                    if err != nil {
+                        tx.Rollback()
+                    } else {
+                        tx.Commit()
+                    }
+                }
+            }
+        }
+    }
+    return nil
 }
 
 func trimGramiumPrefix(id string) string {
@@ -580,8 +704,15 @@ func (n *Node) DebugContacts() ([]string, error) {
 
 func (n *Node) handleStream(stream network.Stream) {
     defer stream.Close()
+
+    if err := stream.SetReadDeadline(time.Now().Add(ReadTimeout)); err != nil {
+        fmt.Println("[ERROR] SetReadDeadline:", err)
+        return
+    }
+
     sec := stream.Conn().ConnState().Security
     fmt.Printf("[SECURE] Encrypted: %s\n", sec)
+
     remoteMeta, err := n.readHandshake(stream)
     if err != nil {
         fmt.Println("[ERROR] Failed to read metadata:", err)
@@ -591,30 +722,50 @@ func (n *Node) handleStream(stream network.Stream) {
         fmt.Println("[ERROR] Failed to send metadata:", err)
         return
     }
+
     peerIDStr := stream.Conn().RemotePeer().String()
     n.updateContactMeta(peerIDStr, "", remoteMeta)
-    buf := make([]byte, 1024)
-    readLen, err := stream.Read(buf)
+
+    msgData, err := readMessage(stream)
     if err != nil {
+        fmt.Println("[ERROR] Failed to read message:", err)
         return
     }
-    msg := string(buf[:readLen])
+    msg := string(msgData)
+
     displayName := remoteMeta.Username
     if remoteMeta.DisplayName != "" {
         displayName = remoteMeta.DisplayName
     }
     fmt.Printf("\n[MESSAGE] [%s] %s\n", displayName, msg)
+
     tx, err := n.DB.Begin()
     if err != nil {
         fmt.Println("Transaction start error:", err)
         return
     }
     defer tx.Rollback()
+
     var contactID int
     row := tx.QueryRow("SELECT id FROM contacts WHERE peer_id = ?", peerIDStr)
     row.Scan(&contactID)
     if contactID > 0 {
-        _, err = tx.Exec("INSERT INTO messages (contact_id, is_outgoing, message, timestamp, protocol) VALUES (?, ?, ?, ?, ?)", contactID, false, msg, time.Now().Unix(), "gramium")
+        var lastHash sql.NullString
+        err = tx.QueryRow("SELECT hash FROM messages ORDER BY id DESC LIMIT 1").Scan(&lastHash)
+        if err != nil && err != sql.ErrNoRows {
+            fmt.Println("Failed to get last hash:", err)
+            return
+        }
+        prevHash := ""
+        if lastHash.Valid {
+            prevHash = lastHash.String
+        }
+        timestamp := time.Now().Unix()
+        newHash := n.computeMessageHash(prevHash, contactID, false, msg, timestamp, "gramium")
+        _, err = tx.Exec(`
+            INSERT INTO messages (contact_id, is_outgoing, message, timestamp, protocol, hash, prev_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, contactID, false, msg, timestamp, "gramium", newHash, prevHash)
         if err != nil {
             fmt.Println("Failed to save message:", err)
             return
@@ -809,6 +960,13 @@ func (n *Node) SwitchMode(newMode string) error {
 }
 
 func (n *Node) Start() error {
+    go func() {
+        if err := n.VerifyIntegrity(); err != nil {
+            fmt.Printf("\n[WARNING] Integrity check failed: %v\n", err)
+        } else {
+            fmt.Println("\n[OK] Message history integrity verified.")
+        }
+    }()
     fmt.Println("[START] Mode:", n.Cfg.Mode)
     ids := n.GetIDs()
     fmt.Println("[ID] Gramium ID:", ids["gramium"])

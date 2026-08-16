@@ -58,7 +58,9 @@ func RunCLI(proxyURL string) {
     fmt.Print("██║   ██║██╔══██╗██╔══██║██║╚██╔╝██║██║██║   ██║██║╚██╔╝██║\n")
     fmt.Print("╚██████╔╝██║  ██║██║  ██║██║ ╚═╝ ██║██║╚██████╔╝██║ ╚═╝ ██║\n")
     fmt.Print(" ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ ╚═╝     ╚═╝\n")
-    fmt.Print("\n")                                                       
+    fmt.Print("                The decentralized network                  \n")
+    fmt.Print("\n")
+    fmt.Print("[INFO] WARNING! Compile the program from the official source code; we do not recommend using binaries compiled by others, as this could compromise your privacy or harm your system.\n")                                                       
     home, err := os.UserHomeDir()
     if err != nil {
         fmt.Printf("[WARN] Failed to retrieve home directory: %v\n", err)
@@ -289,6 +291,7 @@ func RunCLI(proxyURL string) {
                                 Affects libp2p NAT, relay and hole punching.
 
     /status                   – show node status (peer ID, bootstrap connections, etc.)
+    /verify                   – verify integrity of message history (blockchain-like)
 
   CONTACT MANAGEMENT
   ──────────────────
@@ -802,6 +805,13 @@ func RunCLI(proxyURL string) {
         //    for _, l := range lines {
         //        fmt.Println("  ", l)
         //    }
+
+        case "/verify":
+            if err := node.VerifyIntegrity(); err != nil {
+                fmt.Printf("[ERROR] Integrity check failed: %v\n", err)
+            } else {
+                fmt.Println("[OK] All messages integrity verified.")
+            }
 
         case "/decryptdb":
             method, err := node.AuthManager.LoadAuthMeta()

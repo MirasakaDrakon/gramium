@@ -93,6 +93,16 @@ func (am *AuthManager) AuthMetaExists() bool {
     return err == nil
 }
 
+func (am *AuthManager) zeroSensitiveData() {
+    if am.privKey != nil {
+        for i := range am.privKey {
+            am.privKey[i] = 0
+        }
+        am.privKey = nil
+    }
+    am.password = ""
+}
+
 func (am *AuthManager) generateSalt() ([]byte, error) {
     salt := make([]byte, am.config.SaltLength)
     _, err := rand.Read(salt)
@@ -240,6 +250,8 @@ func (am *AuthManager) CreateDatabase(password string, meta *PeerMeta, method in
             message TEXT,
             timestamp INTEGER,
             protocol TEXT,
+            hash TEXT,          
+            prev_hash TEXT,
             FOREIGN KEY(contact_id) REFERENCES contacts(id)
         );
         CREATE TABLE bootstrap_peers (
@@ -361,6 +373,8 @@ func (am *AuthManager) PurgeDatabase(password string) error {
     //
     //TOX DISABLED!!!
 
+    am.zeroSensitiveData()
+    
     if removeErr != nil {
         return fmt.Errorf("partial removal: %w", removeErr)
     }
@@ -413,7 +427,35 @@ func (am *AuthManager) OpenDatabase(password string) (*sql.DB, *PeerMeta, error)
     if err != nil {
         fmt.Println("[WARN] Could not ensure bootstrap_peers table:", err)
     }
-
+    var hasHash, hasPrevHash bool
+    rows, err := db.Query("PRAGMA table_info(messages)")
+    if err == nil {
+        defer rows.Close()
+        for rows.Next() {
+            var cid int
+            var name, ctype string
+            var notnull, dflt, pk int
+            rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+            if name == "hash" {
+                hasHash = true
+            }
+            if name == "prev_hash" {
+                hasPrevHash = true
+            }
+        }
+    }
+    if !hasHash {
+        _, err = db.Exec("ALTER TABLE messages ADD COLUMN hash TEXT")
+        if err != nil {
+            fmt.Println("[WARN] Failed to add hash column:", err)
+        }
+    }
+    if !hasPrevHash {
+        _, err = db.Exec("ALTER TABLE messages ADD COLUMN prev_hash TEXT")
+        if err != nil {
+            fmt.Println("[WARN] Failed to add prev_hash column:", err)
+        }
+    }
     var username, displayName, bio, avatarHash, clientName, clientVersion, clientOS, status, featuresStr string
     var createdAt int64
 
@@ -497,6 +539,8 @@ func (am *AuthManager) CloseDatabase() error {
     }
     am.tempPath = ""
     am.password = ""
+
+    am.zeroSensitiveData() 
 
     fmt.Println("[OK] Database encrypted and saved")
     return nil

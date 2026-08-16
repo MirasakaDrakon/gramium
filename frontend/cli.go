@@ -814,6 +814,15 @@ func RunCLI(proxyURL string) {
             }
 
         case "/decryptdb":
+            fmt.Println("[WARNING] This will export your entire decrypted database (including all messages and keys) in plain text.")
+            fmt.Println("[WARNING] Only use this for debugging/admin purposes. The exported file is NOT encrypted.")
+            fmt.Print("[WARNING] Are you sure you want to continue? (y/N): ")
+            scanner := bufio.NewScanner(os.Stdin)
+            scanner.Scan()
+            if strings.ToLower(scanner.Text()) != "y" {
+                fmt.Println("[INFO] Export cancelled.")
+                continue
+            }
             method, err := node.AuthManager.LoadAuthMeta()
             if err != nil {
                 fmt.Println("[ERROR] Failed to determine authentication method:", err)

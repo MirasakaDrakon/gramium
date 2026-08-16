@@ -616,6 +616,22 @@ func (n *Node) sendGramiumMessage(to string, data []byte) error {
     if err := stream.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
         return err
     }
+
+    if n.Cfg.Mode == "anonymity" {
+        delay, _ := rand.Int(rand.Reader, big.NewInt(4500))
+        time.Sleep(time.Duration(delay.Int64()+500) * time.Millisecond)
+
+        if len(data) <= 1024 {
+            padded := make([]byte, 1024)
+            binary.BigEndian.PutUint16(padded[:2], uint16(len(data)))
+            copy(padded[2:], data)
+            if _, err := rand.Read(padded[2+len(data):]); err != nil {
+                fmt.Println("[WARN] Failed to pad message:", err)
+            }
+            data = padded
+        }
+    }
+
     if err := writeMessage(stream, data); err != nil {
         return err
     }
@@ -730,6 +746,13 @@ func (n *Node) handleStream(stream network.Stream) {
     if err != nil {
         fmt.Println("[ERROR] Failed to read message:", err)
         return
+    }
+
+    if n.Cfg.Mode == "anonymity" && len(msgData) == 1024 {
+        realLen := int(binary.BigEndian.Uint16(msgData[:2]))
+        if realLen > 0 && realLen <= 1022 {
+            msgData = msgData[2 : 2+realLen]
+        }
     }
     msg := string(msgData)
 
